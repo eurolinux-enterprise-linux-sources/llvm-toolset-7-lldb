@@ -1,0 +1,334 @@
+From 5477480164d7e642214f775c7d9641e4f4e7be7b Mon Sep 17 00:00:00 2001
+From: Pavel Labath <labath@google.com>
+Date: Tue, 7 Nov 2017 10:36:36 +0000
+Subject: [PATCH] "Fix" concurrent events test for arm
+
+Summary:
+The test incremented an atomic varible to trigger the watchpoint event.
+On arm64 this compiled to a ldaxr/stlxr loop, with the watchpoint being
+triggered in the middle of the loop. Hitting the watchpoint resets the
+exclusive monitor, and forces the process to loop one more time, hitting
+the watchpoint again, etc.
+
+While it would be nice if the debugger was able to resume from this
+situation, this is not trivial, and is not what this test is about.
+Therefore, I propose to change this to a simple store to a normal
+variable (which should still trip the watchpoint everywhere, but without
+atomic loops) and file a bug to investigate the possibilities of
+handling the watchpoints in atomic loops in a more reasonable way.
+
+Reviewers: clayborg
+
+Subscribers: aemerson, kristof.beyls, lldb-commits
+
+Differential Revision: https://reviews.llvm.org/D39680
+
+git-svn-id: https://llvm.org/svn/llvm-project/lldb/trunk@317561 91177308-0d34-0410-b5e6-96231b3b80d8
+---
+ packages/Python/lldbsuite/test/decorators.py                       | 7 -------
+ .../TestConcurrentBreakpointsDelayedBreakpointOneWatchpoint.py     | 1 -
+ .../crash_with_watchpoint/TestConcurrentCrashWithWatchpoint.py     | 1 -
+ .../TestConcurrentCrashWithWatchpointBreakpointSignal.py           | 1 -
+ .../delay_signal_watch/TestConcurrentDelaySignalWatch.py           | 1 -
+ .../delay_watch_break/TestConcurrentDelayWatchBreak.py             | 1 -
+ .../TestConcurrentDelayedCrashWithBreakpointWatchpoint.py          | 1 -
+ .../test/functionalities/thread/concurrent_events/main.cpp         | 4 ++--
+ .../n_watch_n_break/TestConcurrentNWatchNBreak.py                  | 1 -
+ .../signal_delay_watch/TestConcurrentSignalDelayWatch.py           | 1 -
+ .../signal_n_watch_n_break/TestConcurrentSignalNWatchNBreak.py     | 1 -
+ .../concurrent_events/signal_watch/TestConcurrentSignalWatch.py    | 1 -
+ .../signal_watch_break/TestConcurrentSignalWatchBreak.py           | 1 -
+ .../TestConcurrentTwoBreakpointsOneWatchpoint.py                   | 1 -
+ .../two_watchpoint_threads/TestConcurrentTwoWatchpointThreads.py   | 1 -
+ .../TestConcurrentTwoWatchpointsOneBreakpoint.py                   | 1 -
+ .../TestConcurrentTwoWatchpointsOneDelayBreakpoint.py              | 1 -
+ .../TestConcurrentTwoWatchpointsOneSignal.py                       | 1 -
+ .../concurrent_events/watch_break/TestConcurrentWatchBreak.py      | 1 -
+ .../watch_break_delay/TestConcurrentWatchBreakDelay.py             | 1 -
+ .../TestConcurrentWatchpointDelayWatchpointOneBreakpoint.py        | 1 -
+ .../TestConcurrentWatchpointWithDelayWatchpointThreads.py          | 1 -
+ 22 files changed, 2 insertions(+), 29 deletions(-)
+
+diff --git a/packages/Python/lldbsuite/test/decorators.py b/packages/Python/lldbsuite/test/decorators.py
+index 2a36ee4..8996cb7 100644
+--- a/packages/Python/lldbsuite/test/decorators.py
++++ b/packages/Python/lldbsuite/test/decorators.py
+@@ -505,13 +505,6 @@ def skipIfRemote(func):
+     return skipTestIfFn(is_remote)(func)
+ 
+ 
+-def skipIfRemoteDueToDeadlock(func):
+-    """Decorate the item to skip tests if testing remotely due to the test deadlocking."""
+-    def is_remote():
+-        return "skip on remote platform (deadlocks)" if lldb.remote_platform else None
+-    return skipTestIfFn(is_remote)(func)
+-
+-
+ def skipIfNoSBHeaders(func):
+     """Decorate the item to mark tests that should be skipped when LLDB is built with no SB API headers."""
+     def are_sb_headers_missing():
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/breakpoints_delayed_breakpoint_one_watchpoint/TestConcurrentBreakpointsDelayedBreakpointOneWatchpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/breakpoints_delayed_breakpoint_one_watchpoint/TestConcurrentBreakpointsDelayedBreakpointOneWatchpoint.py
+index c600d8e..6617b64 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/breakpoints_delayed_breakpoint_one_watchpoint/TestConcurrentBreakpointsDelayedBreakpointOneWatchpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/breakpoints_delayed_breakpoint_one_watchpoint/TestConcurrentBreakpointsDelayedBreakpointOneWatchpoint.py
+@@ -14,7 +14,6 @@ class ConcurrentBreakpointsDelayedBreakpointOneWatchpoint(
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint/TestConcurrentCrashWithWatchpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint/TestConcurrentCrashWithWatchpoint.py
+index 1699038..b32b4cb 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint/TestConcurrentCrashWithWatchpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint/TestConcurrentCrashWithWatchpoint.py
+@@ -13,7 +13,6 @@ class ConcurrentCrashWithWatchpoint(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint_breakpoint_signal/TestConcurrentCrashWithWatchpointBreakpointSignal.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint_breakpoint_signal/TestConcurrentCrashWithWatchpointBreakpointSignal.py
+index 4a58e7c..62bcad5 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint_breakpoint_signal/TestConcurrentCrashWithWatchpointBreakpointSignal.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/crash_with_watchpoint_breakpoint_signal/TestConcurrentCrashWithWatchpointBreakpointSignal.py
+@@ -13,7 +13,6 @@ class ConcurrentCrashWithWatchpointBreakpointSignal(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_signal_watch/TestConcurrentDelaySignalWatch.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_signal_watch/TestConcurrentDelaySignalWatch.py
+index d5d4641..dd6fb72 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_signal_watch/TestConcurrentDelaySignalWatch.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_signal_watch/TestConcurrentDelaySignalWatch.py
+@@ -13,7 +13,6 @@ class ConcurrentDelaySignalWatch(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_watch_break/TestConcurrentDelayWatchBreak.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_watch_break/TestConcurrentDelayWatchBreak.py
+index 9cbb40c..eb3cc2e 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_watch_break/TestConcurrentDelayWatchBreak.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delay_watch_break/TestConcurrentDelayWatchBreak.py
+@@ -13,7 +13,6 @@ class ConcurrentDelayWatchBreak(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delayed_crash_with_breakpoint_watchpoint/TestConcurrentDelayedCrashWithBreakpointWatchpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delayed_crash_with_breakpoint_watchpoint/TestConcurrentDelayedCrashWithBreakpointWatchpoint.py
+index ccbeeb0..94e453b 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delayed_crash_with_breakpoint_watchpoint/TestConcurrentDelayedCrashWithBreakpointWatchpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/delayed_crash_with_breakpoint_watchpoint/TestConcurrentDelayedCrashWithBreakpointWatchpoint.py
+@@ -13,7 +13,6 @@ class ConcurrentDelayedCrashWithBreakpointWatchpoint(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/main.cpp b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/main.cpp
+index 540b514..c888aa0 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/main.cpp
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/main.cpp
+@@ -29,7 +29,7 @@ typedef std::vector<pthread_t> thread_vector;
+ pseudo_barrier_t g_barrier;
+ int g_breakpoint = 0;
+ int g_sigusr1_count = 0;
+-std::atomic_int g_watchme;
++uint32_t g_watchme;
+ 
+ struct action_args {
+   int delay;
+@@ -74,7 +74,7 @@ watchpoint_func (void *input) {
+     pseudo_barrier_wait(g_barrier);
+     do_action_args(input);
+ 
+-    g_watchme += 1;     // watchpoint triggers here
++    g_watchme = 1;     // watchpoint triggers here
+     return 0;
+ }
+ 
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/n_watch_n_break/TestConcurrentNWatchNBreak.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/n_watch_n_break/TestConcurrentNWatchNBreak.py
+index b9a7c5f..f3568e5 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/n_watch_n_break/TestConcurrentNWatchNBreak.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/n_watch_n_break/TestConcurrentNWatchNBreak.py
+@@ -13,7 +13,6 @@ class ConcurrentNWatchNBreak(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_delay_watch/TestConcurrentSignalDelayWatch.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_delay_watch/TestConcurrentSignalDelayWatch.py
+index 1282453..878c677 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_delay_watch/TestConcurrentSignalDelayWatch.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_delay_watch/TestConcurrentSignalDelayWatch.py
+@@ -13,7 +13,6 @@ class ConcurrentSignalDelayWatch(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_n_watch_n_break/TestConcurrentSignalNWatchNBreak.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_n_watch_n_break/TestConcurrentSignalNWatchNBreak.py
+index 56217e1..203604c 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_n_watch_n_break/TestConcurrentSignalNWatchNBreak.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_n_watch_n_break/TestConcurrentSignalNWatchNBreak.py
+@@ -13,7 +13,6 @@ class ConcurrentSignalNWatchNBreak(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch/TestConcurrentSignalWatch.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch/TestConcurrentSignalWatch.py
+index 0010628..4adc9df 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch/TestConcurrentSignalWatch.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch/TestConcurrentSignalWatch.py
+@@ -13,7 +13,6 @@ class ConcurrentSignalWatch(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch_break/TestConcurrentSignalWatchBreak.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch_break/TestConcurrentSignalWatchBreak.py
+index d772500..3de0865 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch_break/TestConcurrentSignalWatchBreak.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/signal_watch_break/TestConcurrentSignalWatchBreak.py
+@@ -13,7 +13,6 @@ class ConcurrentSignalWatchBreak(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_breakpoints_one_watchpoint/TestConcurrentTwoBreakpointsOneWatchpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_breakpoints_one_watchpoint/TestConcurrentTwoBreakpointsOneWatchpoint.py
+index f26a5dc..9a89641 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_breakpoints_one_watchpoint/TestConcurrentTwoBreakpointsOneWatchpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_breakpoints_one_watchpoint/TestConcurrentTwoBreakpointsOneWatchpoint.py
+@@ -13,7 +13,6 @@ class ConcurrentTwoBreakpointsOneWatchpoint(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoint_threads/TestConcurrentTwoWatchpointThreads.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoint_threads/TestConcurrentTwoWatchpointThreads.py
+index 059e077..1deacd6 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoint_threads/TestConcurrentTwoWatchpointThreads.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoint_threads/TestConcurrentTwoWatchpointThreads.py
+@@ -13,7 +13,6 @@ class ConcurrentTwoWatchpointThreads(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_breakpoint/TestConcurrentTwoWatchpointsOneBreakpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_breakpoint/TestConcurrentTwoWatchpointsOneBreakpoint.py
+index 4b3c35e..ce0c727 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_breakpoint/TestConcurrentTwoWatchpointsOneBreakpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_breakpoint/TestConcurrentTwoWatchpointsOneBreakpoint.py
+@@ -13,7 +13,6 @@ class ConcurrentTwoWatchpointsOneBreakpoint(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_delay_breakpoint/TestConcurrentTwoWatchpointsOneDelayBreakpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_delay_breakpoint/TestConcurrentTwoWatchpointsOneDelayBreakpoint.py
+index ae6f644..38d7500 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_delay_breakpoint/TestConcurrentTwoWatchpointsOneDelayBreakpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_delay_breakpoint/TestConcurrentTwoWatchpointsOneDelayBreakpoint.py
+@@ -13,7 +13,6 @@ class ConcurrentTwoWatchpointsOneDelayBreakpoint(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_signal/TestConcurrentTwoWatchpointsOneSignal.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_signal/TestConcurrentTwoWatchpointsOneSignal.py
+index 78f2dbb..408ad48 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_signal/TestConcurrentTwoWatchpointsOneSignal.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/two_watchpoints_one_signal/TestConcurrentTwoWatchpointsOneSignal.py
+@@ -13,7 +13,6 @@ class ConcurrentTwoWatchpointsOneSignal(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break/TestConcurrentWatchBreak.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break/TestConcurrentWatchBreak.py
+index ffa6909..47b360a 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break/TestConcurrentWatchBreak.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break/TestConcurrentWatchBreak.py
+@@ -13,7 +13,6 @@ class ConcurrentWatchBreak(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break_delay/TestConcurrentWatchBreakDelay.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break_delay/TestConcurrentWatchBreakDelay.py
+index 4c8b5b3..8eeed7f 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break_delay/TestConcurrentWatchBreakDelay.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watch_break_delay/TestConcurrentWatchBreakDelay.py
+@@ -13,7 +13,6 @@ class ConcurrentWatchBreakDelay(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_delay_watchpoint_one_breakpoint/TestConcurrentWatchpointDelayWatchpointOneBreakpoint.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_delay_watchpoint_one_breakpoint/TestConcurrentWatchpointDelayWatchpointOneBreakpoint.py
+index 0d545b3..cfcb871 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_delay_watchpoint_one_breakpoint/TestConcurrentWatchpointDelayWatchpointOneBreakpoint.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_delay_watchpoint_one_breakpoint/TestConcurrentWatchpointDelayWatchpointOneBreakpoint.py
+@@ -13,7 +13,6 @@ class ConcurrentWatchpointDelayWatchpointOneBreakpoint(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+diff --git a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_with_delay_watchpoint_threads/TestConcurrentWatchpointWithDelayWatchpointThreads.py b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_with_delay_watchpoint_threads/TestConcurrentWatchpointWithDelayWatchpointThreads.py
+index 56cd85d..3075dde 100644
+--- a/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_with_delay_watchpoint_threads/TestConcurrentWatchpointWithDelayWatchpointThreads.py
++++ b/packages/Python/lldbsuite/test/functionalities/thread/concurrent_events/watchpoint_with_delay_watchpoint_threads/TestConcurrentWatchpointWithDelayWatchpointThreads.py
+@@ -13,7 +13,6 @@ class ConcurrentWatchpointWithDelayWatchpointThreads(ConcurrentEventsBase):
+     mydir = ConcurrentEventsBase.compute_mydir(__file__)
+ 
+     @skipIfFreeBSD  # timing out on buildbot
+-    @skipIfRemoteDueToDeadlock
+     # Atomic sequences are not supported yet for MIPS in LLDB.
+     @skipIf(triple='^mips')
+     def test(self):
+-- 
+1.8.3.1
+

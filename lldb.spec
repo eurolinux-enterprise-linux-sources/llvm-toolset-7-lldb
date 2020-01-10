@@ -2,29 +2,31 @@
 %{!?scl:%global pkg_name %{name}}
 
 Name:		%{?scl_prefix}lldb
-Version:	4.0.1
-Release:	5%{?dist}
+Version:	5.0.1
+Release:	4%{?dist}
 Summary:	Next generation high-performance debugger
 
 License:	NCSA
 URL:		http://lldb.llvm.org/
 Source0:	http://llvm.org/releases/%{version}/%{pkg_name}-%{version}.src.tar.xz
-Source1:	http://llvm.org/releases/%{version}/llvm-%{version}.src.tar.xz
-Source2:	http://llvm.org/releases/%{version}/cfe-%{version}.src.tar.xz
+Patch0: 	0001-Work-around-test-failures-on-red-hat-linux.patch
+Patch1: 	0001-Fix-concurrent-events-test-for-arm.patch
 
 ExclusiveArch:  %{arm} aarch64 %{ix86} x86_64
 
-# lldb: libedit produces garbled, unusable input on Linux
-Patch0: r303907-libedit.patch
-Patch1: 0001-Fix-LLDB-crash-accessing-unknown-DW_FORM_-attributes.patch
-
 BuildRequires:	%{?scl_prefix}cmake
+BuildRequires:  %{?scl_prefix}llvm-devel = %{version}
+BuildRequires:  %{?scl_prefix}clang-devel = %{version}
 BuildRequires:  ncurses-devel
 BuildRequires:  swig
+BuildRequires:  %{?scl_prefix}llvm-static = %{version}
 BuildRequires:  libffi-devel
 BuildRequires:  zlib-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  libedit-devel
+
+Requires: %{?scl_prefix}llvm-libs = %{version}
+Requires: %{?scl_prefix}clang-libs = %{version}
 
 %description
 LLDB is a next generation, high-performance debugger. It is built as a set
@@ -49,10 +51,8 @@ Requires:	%{?scl_prefix}lldb = %{version}-%{release}
 The package contains the LLDB Python module.
 
 %prep
-%setup -T -q -b 1 -n llvm-%{version}.src
-%setup -T -q -b 2 -n cfe-%{version}.src
-
 %setup -q -n %{pkg_name}-%{version}.src
+
 %patch0 -p1
 %patch1 -p1
 
@@ -62,111 +62,6 @@ sed -i -e "s~import sys~import sys\nsys.path.insert\(1, '%{?scl:%{_scl_root}}%{p
 
 %build
 
-%global __cmake %{_bindir}/cmake
-
-# This is the location of the Clang and LLVM build that LLDB will link statically to.
-INSTALLDIR=%{_builddir}/install-lldb-static
-
-# Add 'lldb-' prefix to the Clang/LLVM source directory to avoid debug info path
-# clashes with the regular Clang/LLVM package.
-cd %{_builddir}
-mv llvm-%{version}.src lldb-llvm-%{version}.src
-mv cfe-%{version}.src lldb-cfe-%{version}.src
-
-# Build static LLVM libraries for LLDB.
-cd lldb-llvm-%{version}.src
-mkdir -p _build
-cd _build
-
-%{_bindir}/cmake .. \
-        -DBUILD_SHARED_LIBS:BOOL=OFF \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-%ifarch s390
-        -DCMAKE_C_FLAGS_RELWITHDEBINFO="%{optflags} -DNDEBUG" \
-        -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="%{optflags} -DNDEBUG" \
-%endif
-%if 0%{?__isa_bits} == 64
-        -DLLVM_LIBDIR_SUFFIX=64 \
-%else
-        -DLLVM_LIBDIR_SUFFIX= \
-%endif
-        \
-        -DLLVM_TARGETS_TO_BUILD="X86;AArch64" \
-        -DLLVM_ENABLE_LIBCXX:BOOL=OFF \
-        -DLLVM_ENABLE_ZLIB:BOOL=ON \
-        -DLLVM_ENABLE_FFI:BOOL=ON \
-        -DLLVM_ENABLE_RTTI:BOOL=ON \
-%if %{with gold}
-        -DLLVM_BINUTILS_INCDIR=%{_includedir} \
-%endif
-        \
-        -DLLVM_BUILD_RUNTIME:BOOL=ON \
-        \
-        -DLLVM_INCLUDE_TOOLS:BOOL=ON \
-        -DLLVM_BUILD_TOOLS:BOOL=ON \
-        \
-        -DLLVM_INCLUDE_TESTS:BOOL=OFF \
-        -DLLVM_BUILD_TESTS:BOOL=OFF \
-        \
-        -DLLVM_INCLUDE_EXAMPLES:BOOL=OFF \
-        -DLLVM_BUILD_EXAMPLES:BOOL=OFF \
-        \
-        -DLLVM_INCLUDE_UTILS:BOOL=ON \
-        -DLLVM_INSTALL_UTILS:BOOL=OFF \
-        \
-        -DLLVM_INCLUDE_DOCS:BOOL=OFF \
-        -DLLVM_BUILD_DOCS:BOOL=OFF \
-        -DLLVM_ENABLE_SPHINX:BOOL=OFF \
-        -DLLVM_ENABLE_DOXYGEN:BOOL=OFF \
-        \
-        -DLLVM_BUILD_LLVM_DYLIB:BOOL=OFF \
-        -DLLVM_LINK_LLVM_DYLIB:BOOL=OFF \
-        -DLLVM_BUILD_EXTERNAL_COMPILER_RT:BOOL=ON \
-        -DLLVM_INSTALL_TOOLCHAIN_ONLY:BOOL=OFF \
-        \
-        -DSPHINX_WARNINGS_AS_ERRORS=OFF \
-        -DCMAKE_VERBOSE_MAKEFILE=ON \
-        -DCMAKE_INSTALL_PREFIX=$INSTALLDIR
-
-make %{?_smp_mflags}
-make %{?_smp_mflags} install
-
-# Build static Clang libraries for LLDB.
-cd ../../lldb-cfe-%{version}.src
-mkdir -p _build
-cd _build
-
-%{_bindir}/cmake .. \
-        -DLLVM_LINK_LLVM_DYLIB:BOOL=OFF \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DLLVM_CONFIG:FILEPATH=$INSTALLDIR/bin/llvm-config \
-        \
-        -DCLANG_ENABLE_ARCMT:BOOL=ON \
-        -DCLANG_ENABLE_STATIC_ANALYZER:BOOL=ON \
-        -DCLANG_INCLUDE_DOCS:BOOL=OFF \
-        -DCLANG_INCLUDE_TESTS:BOOL=OFF \
-        -DCLANG_PLUGIN_SUPPORT:BOOL=ON \
-        -DENABLE_LINKER_BUILD_ID:BOOL=ON \
-	-DBUILD_SHARED_LIBS:BOOL=OFF \
-        -DLLVM_ENABLE_EH=ON \
-        -DLLVM_ENABLE_RTTI=ON \
-        -DLLVM_ENABLE_SPHINX=ON \
-        -DCLANG_BUILD_TOOLS=OFF \
-        \
-        -DCLANG_BUILD_EXAMPLES:BOOL=OFF \
-%if 0%{?__isa_bits} == 64
-        -DLLVM_LIBDIR_SUFFIX=64 \
-%else
-        -DLLVM_LIBDIR_SUFFIX= \
-%endif
-        -DCMAKE_VERBOSE_MAKEFILE=ON \
-        -DCMAKE_INSTALL_PREFIX=$INSTALLDIR
-
-make %{?_smp_mflags}
-make %{?_smp_mflags} install
-
-# Now build LLDB itself.
-cd ../../%{pkg_name}-%{version}.src
 mkdir -p _build
 cd _build
 
@@ -177,18 +72,15 @@ LDFLAGS="%{__global_ldflags} -lpthread -ldl"
 CFLAGS="%{optflags} -Wno-error=format-security"
 CXXFLAGS="%{optflags} -Wno-error=format-security"
 
-# Tell CMake where it can find LLVMConfig.cmake.
-%if 0%{?__isa_bits} == 64
-export LLVM_DIR=$INSTALLDIR/lib64/cmake/llvm
-%else
-export LLVM_DIR=$INSTALLDIR/lib/cmake/llvm
-%endif
+%global __cmake %{_bindir}/cmake
 
 %cmake .. \
 	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DBUILD_SHARED_LIBS:BOOL=OFF \
-        -DLLVM_LINK_LLVM_DYLIB:BOOL=OFF \
-	-DLLVM_CONFIG:FILEPATH=$INSTALLDIR/bin/llvm-config \
+	-DLLVM_LINK_LLVM_DYLIB:BOOL=ON \
+	-DLLVM_CONFIG:FILEPATH=%{_bindir}/llvm-config \
+	\
+	-DLLDB_PATH_TO_LLVM_BUILD=%{_prefix} \
+	-DLLDB_PATH_TO_CLANG_BUILD=%{_prefix} \
 	\
 	-DLLDB_DISABLE_CURSES:BOOL=OFF \
 	-DLLDB_DISABLE_LIBEDIT:BOOL=OFF \
@@ -203,7 +95,9 @@ export LLVM_DIR=$INSTALLDIR/lib/cmake/llvm
 	-DPYTHON_VERSION_MAJOR:STRING=$(%{__python} -c "import sys; print sys.version_info.major") \
 	-DPYTHON_VERSION_MINOR:STRING=$(%{__python} -c "import sys; print sys.version_info.minor")
 
+%{?scl:scl enable %scl - << \EOF}
 make %{?_smp_mflags}
+%{?scl:EOF}
 
 %install
 cd _build
@@ -217,6 +111,11 @@ liblldb=$(basename $(readlink -e %{buildroot}%{_libdir}/liblldb.so))
 ln -vsf "../../../${liblldb}" %{buildroot}%{?scl:%{_scl_root}}%{python_sitearch}/lldb/_lldb.so
 mv -v %{buildroot}%{?scl:%{_scl_root}}%{python_sitearch}/readline.so %{buildroot}%{?scl:%{_scl_root}}%{python_sitearch}/lldb/readline.so
 
+# Move this plugin to libdir.
+# FIXME: I have no idea why this is installed to bindir.  Moving it to libdir
+# may break it, but I don't know how to test this.
+mv -v %{buildroot}{%{_bindir},%{_libdir}}/liblldb-intel-mpxtable.so
+
 # remove bundled six.py
 rm -f %{buildroot}%{?scl:%{_scl_root}}%{python_sitearch}/six.*
 
@@ -226,6 +125,7 @@ rm -f %{buildroot}%{?scl:%{_scl_root}}%{python_sitearch}/six.*
 %files
 %{_bindir}/lldb*
 %{_libdir}/liblldb.so.*
+%{_libdir}/liblldb-intel-mpxtable.so
 
 %files devel
 %{_includedir}/lldb
@@ -235,9 +135,17 @@ rm -f %{buildroot}%{?scl:%{_scl_root}}%{python_sitearch}/six.*
 %{?scl:%{_scl_root}}%{python_sitearch}/lldb
 
 %changelog
-* Wed Aug 16 2017 Tom Stellard <tstellar@redhat.com> - 4.0.1-5
-- Statically link llvm and clang libs
-  Resolves: #1479847
+* Wed Mar 14 2018 Tilmann Scheller <tschelle@redhat.com> - 5.0.1-4
+- Backport test fixes for rhbz#1470621, fixes various tests that are timing out
+
+* Wed Mar 14 2018 Tilmann Scheller <tschelle@redhat.com> - 5.0.1-3
+- Backport test fixes for rhbz#1470608, fixes TestLambdas.py
+
+* Tue Jan 16 2018 Tom Stellard <tstellar@redhat.com> - 5.0.1-2
+- Rebuid for i686
+
+* Thu Jan 11 2018 Tom Stellard <tstellar@redhat.com> - 5.0.1-1
+- 5.0.1 Release
 
 * Wed Aug 16 2017 Tom Stellard <tstellar@redhat.com> - 4.0.1-4
 -  Fix crash when loading Fedora debuginfo

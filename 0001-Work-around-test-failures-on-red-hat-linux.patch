@@ -1,0 +1,123 @@
+From 83aa29accda1f3adf16ae97ddb0df133bf52a66f Mon Sep 17 00:00:00 2001
+From: Pavel Labath <labath@google.com>
+Date: Thu, 21 Dec 2017 14:40:03 +0000
+Subject: [PATCH] Work around test failures on red-hat linux
+
+Two tests were failing because the debugger was picking up multiply
+defined internal symbols from the system libraries. This is a bug, as
+there should be no ambiguity because the tests are defining variables
+with should shadow these symbols, but lldb is not smart enough to figure
+that out.
+
+I work around the issue by renaming the variables in these tests, and in
+exchange I create a self-contained test which reproduces the issue
+without depending on the system libraries.
+
+This increases the predictability of our test suite.
+
+git-svn-id: https://llvm.org/svn/llvm-project/lldb/trunk@321271 91177308-0d34-0410-b5e6-96231b3b80d8
+---
+ .../radar_9673664/TestExprHelpExamples.py          |  2 +-
+ .../c/conflicting-symbol/TestConflictingSymbol.py  | 45 +++++++++++++++++++---
+ .../lldbsuite/test/lang/cpp/lambdas/main.cpp       |  2 +-
+ 3 files changed, 41 insertions(+), 8 deletions(-)
+
+diff --git a/packages/Python/lldbsuite/test/expression_command/radar_9673664/TestExprHelpExamples.py b/packages/Python/lldbsuite/test/expression_command/radar_9673664/TestExprHelpExamples.py
+index a6c0c05..4fc2463 100644
+--- a/packages/Python/lldbsuite/test/expression_command/radar_9673664/TestExprHelpExamples.py
++++ b/packages/Python/lldbsuite/test/expression_command/radar_9673664/TestExprHelpExamples.py
+@@ -42,7 +42,7 @@ class Radar9673644TestCase(TestBase):
+ 
+         # rdar://problem/9673664 lldb expression evaluation problem
+ 
+-        self.expect('expr char c[] = "foo"; c[0]',
++        self.expect('expr char str[] = "foo"; str[0]',
+                     substrs=["'f'"])
+         # runCmd: expr char c[] = "foo"; c[0]
+         # output: (char) $0 = 'f'
+diff --git a/packages/Python/lldbsuite/test/lang/c/conflicting-symbol/TestConflictingSymbol.py b/packages/Python/lldbsuite/test/lang/c/conflicting-symbol/TestConflictingSymbol.py
+index d332770..328c383 100644
+--- a/packages/Python/lldbsuite/test/lang/c/conflicting-symbol/TestConflictingSymbol.py
++++ b/packages/Python/lldbsuite/test/lang/c/conflicting-symbol/TestConflictingSymbol.py
+@@ -16,6 +16,13 @@ class TestConflictingSymbols(TestBase):
+     mydir = TestBase.compute_mydir(__file__)
+     NO_DEBUG_INFO_TESTCASE = True
+ 
++    def setUp(self):
++        TestBase.setUp(self)
++
++        self.One_line = line_number('One/One.c', '// break here')
++        self.Two_line = line_number('Two/Two.c', '// break here')
++        self.main_line = line_number('main.c', '// break here')
++
+     def test_conflicting_symbols(self):
+         self.build()
+         exe = os.path.join(os.getcwd(), "a.out")
+@@ -27,15 +34,12 @@ class TestConflictingSymbols(TestBase):
+         environment = self.registerSharedLibrariesWithTarget(
+             target, ['One', 'Two'])
+ 
+-        One_line = line_number('One/One.c', '// break here')
+-        Two_line = line_number('Two/Two.c', '// break here')
+-        main_line = line_number('main.c', '// break here')
+         lldbutil.run_break_set_command(
+-            self, 'breakpoint set -f One.c -l %s' % (One_line))
++            self, 'breakpoint set -f One.c -l %s' % (self.One_line))
+         lldbutil.run_break_set_command(
+-            self, 'breakpoint set -f Two.c -l %s' % (Two_line))
++            self, 'breakpoint set -f Two.c -l %s' % (self.Two_line))
+         lldbutil.run_break_set_by_file_and_line(
+-            self, 'main.c', main_line, num_expected_locations=1, loc_exact=True)
++            self, 'main.c', self.main_line, num_expected_locations=1, loc_exact=True)
+ 
+         process = target.LaunchSimple(
+             None, environment, self.get_process_working_directory())
+@@ -88,3 +92,32 @@ class TestConflictingSymbols(TestBase):
+             error=True,
+             substrs=[
+                 "Multiple internal symbols"])
++
++    @expectedFailureAll(bugnumber="llvm.org/pr35043")
++    def test_shadowed(self):
++        self.build()
++        exe = os.path.join(os.getcwd(), "a.out")
++        target = self.dbg.CreateTarget("a.out")
++        self.assertTrue(target, VALID_TARGET)
++
++        # Register our shared libraries for remote targets so they get
++        # automatically uploaded
++        environment = self.registerSharedLibrariesWithTarget(
++            target, ['One', 'Two'])
++
++        lldbutil.run_break_set_by_file_and_line(self, 'main.c', self.main_line)
++
++        process = target.LaunchSimple(
++            None, environment, self.get_process_working_directory())
++        self.assertTrue(process, PROCESS_IS_VALID)
++
++        # The stop reason of the thread should be breakpoint.
++        self.expect("thread list", STOPPED_DUE_TO_BREAKPOINT,
++                    substrs=['stopped',
++                             'stop reason = breakpoint'])
++
++        # As we are shadowing the conflicting symbol, there should be no
++        # ambiguity in this expression.
++        self.expect(
++            "expr int conflicting_symbol = 474747; conflicting_symbol",
++            substrs=[ "474747"])
+diff --git a/packages/Python/lldbsuite/test/lang/cpp/lambdas/main.cpp b/packages/Python/lldbsuite/test/lang/cpp/lambdas/main.cpp
+index 3cce3ba..0432cc1 100644
+--- a/packages/Python/lldbsuite/test/lang/cpp/lambdas/main.cpp
++++ b/packages/Python/lldbsuite/test/lang/cpp/lambdas/main.cpp
+@@ -11,7 +11,7 @@
+ 
+ int main (int argc, char const *argv[])
+ {
+-    printf("Stop here\n"); //% self.runCmd("expression auto $add = [](int a, int b) { return a + b; }")
++    printf("Stop here\n"); //% self.runCmd("expression auto $add = [](int first, int second) { return first + second; }")
+                            //% self.expect("expression $add(2,3)", substrs = ['= 5'])
+     return 0;
+ }
+-- 
+1.8.3.1
+
